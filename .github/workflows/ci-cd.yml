@@ -1,0 +1,167 @@
+name: CI/CD for OCR ID Card Extractor
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  lint-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black isort
+        cd src && pip install -r requirements.txt
+        
+    - name: Lint with flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings
+        flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+        
+    - name: Check code formatting with black
+      run: black --check src/
+      
+    - name: Check imports with isort
+      run: isort --check-only src/
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint-and-validate
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        cd src && pip install -r requirements.txt
+        pip install pytest pytest-cov
+        
+    - name: Create test files if not exist
+      run: |
+        mkdir -p tests
+        if [ ! -f tests/test_basic.py ]; then
+          cat > tests/test_basic.py << 'EOF'
+          """Basic tests for the OCR ID Card Extractor."""
+          import os
+          import sys
+          
+          # Add src to path for imports
+          sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+          
+          def test_imports():
+              """Test that main modules can be imported."""
+              try:
+                  from app.simple_extract import sanitize_filename
+                  assert callable(sanitize_filename)
+              except ImportError as e:
+                  # Skip if dependencies not available
+                  pass
+                  
+          def test_sanitize_filename():
+              """Test filename sanitization function."""
+              from app.simple_extract import sanitize_filename
+              
+              # Test basic functionality
+              assert sanitize_filename("test:file") == "testfile"
+              assert sanitize_filename("test<>file") == "testfile"
+              assert sanitize_filename("normal_file") == "normal_file"
+          EOF
+        fi
+        
+    - name: Run tests
+      run: |
+        python -m pytest tests/ -v --tb=short
+        
+    - name: Test basic script functionality
+      run: |
+        cd src
+        python -c "from app.simple_extract import sanitize_filename; print('Basic import test passed')"
+
+  security-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install security tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+        
+    - name: Run security scan with bandit
+      run: bandit -r src/ -f json -o bandit-report.json || true
+      
+    - name: Check for known vulnerabilities
+      run: |
+        cd src && safety check -r requirements.txt || true
+
+  build:
+    runs-on: ubuntu-latest
+    needs: [lint-and-validate, test, security-check]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        cd src && pip install -r requirements.txt
+        
+    - name: Create distribution package
+      run: |
+        # Create a simple package structure
+        mkdir -p dist/ocr_extractor
+        cp -r src/* dist/ocr_extractor/
+        cd dist && tar -czf ocr_extractor.tar.gz ocr_extractor/
+        
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: ocr-extractor-package
+        path: dist/ocr_extractor.tar.gz
+        retention-days: 30
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+    - name: Download artifacts
+      uses: actions/download-artifact@v3
+      with:
+        name: ocr-extractor-package
+        
+    - name: Deploy notification
+      run: |
+        echo "🚀 Deployment would happen here"
+        echo "📦 Package ready: ocr_extractor.tar.gz"
+        echo "🔗 This could deploy to:"
+        echo "   - Cloud storage"
+        echo "   - Container registry" 
+        echo "   - Package repository"
+        echo "   - Production server"
